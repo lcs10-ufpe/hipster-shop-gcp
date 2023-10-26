@@ -1,0 +1,147 @@
+---
+- name: Garantir que o Docker esteja instalado
+  hosts: all
+  remote_user: lcs10
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Update apt
+      shell: | 
+        apt-get update
+
+    - name: Install required system packages
+      shell: |
+        apt --yes --force-yes install \ 
+        apt-transport-https \
+        ca-certificates \
+        curl \
+        gnupg-agent \
+        software-properties-common
+        
+    - name: Add Kubernetes repositories
+      shell:
+        cmd: |
+          sudo apt-get install -y apt-transport-https ca-certificates curl
+          curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add
+          echo "deb https://apt.kubernetes.io/ kubernetes-xenial main" >> ~/kubernetes.list
+          sudo mv ~/kubernetes.list /etc/apt/sources.list.d
+          sudo apt update
+          
+    - name: Install Kubernetes tools
+      shell:
+        cmd: |
+          sudo apt-get install -y kubelet kubeadm kubectl kubernetes-cni
+          sudo apt-mark hold kubelet kubeadm kubectl
+          
+    - name: Load Kernel modules & settings
+      shell:
+        cmd: |
+          sudo modprobe overlay
+          sudo modprobe br_netfilter
+          
+    - name: Installing kubeadm, kubelet and kubectl
+      shell:
+        cmd: |
+          sudo tee /etc/sysctl.d/kubernetes.conf<<EOF
+          net.bridge.bridge-nf-call-ip6tables = 1
+          net.bridge.bridge-nf-call-iptables = 1
+          net.ipv4.ip_forward = 1
+          EOF
+          
+    - name: Reload the changes to take effect
+      shell:
+        cmd: |
+          sudo sysctl --system
+          
+    - name: Install Containerd
+      shell:
+        cmd: |
+          sudo apt-get update
+          sudo apt-get install \
+              ca-certificates \
+              curl \
+              gnupg \
+              lsb-release -y
+          sudo mkdir -p /etc/apt/keyrings
+          curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+          echo \
+           "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+           $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+          
+    - name: Remove the already installed version of containerd
+      shell:
+        cmd: |
+          sudo apt remove containerd
+          sudo apt update
+          sudo apt install containerd.io -y
+          sudo rm /etc/containerd/config.toml
+          sudo systemctl restart containerd
+          
+    - name: Disable swap
+      shell:
+        cmd: |
+          sudo sed -ri '/\sswap\s/s/^#?/#/' /etc/fstab
+          sudo swapoff -a
+          
+    - name: Initialize the cluster with kubeadm
+      shell:
+        cmd: |
+          sudo systemctl enable kubelet
+          
+    - name: Init kubeadm
+      shell: |
+        sudo kubeadm init --pod-network-cidr=10.244.0.0/16
+        
+    - name: Start cluster
+      shell:
+        cmd: |
+          mkdir $HOME/.kube
+          sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+          sudo chown $(id -u):$(id -g) $HOME/.kube/config
+          export KUBECONFIG=/etc/kubernetes/admin.conf
+          sudo chmod 644 /etc/kubernetes/admin.conf
+          kubectl apply -f https://raw.githubusercontent.com/flannel-io/flannel/v0.20.2/Documentation/kube-flannel.yml
+          kubectl taint nodes --all node-role.kubernetes.io/control-plane-
+        
+    - name: Get Pods 1
+      shell: |
+        kubectl get pods --all-namespaces
+        
+    - name: Install Git 
+      shell: |
+        sudo apt install git
+
+    - name: Clone this repository Hipster Shop
+      shell:
+        cmd: |
+          git clone https://github.com/GoogleCloudPlatform/microservices-demo.git
+          
+    - name: Get Pods 2
+      shell: |
+        kubectl get pods --all-namespaces
+
+    - name: Deploy the sample app to the cluster 
+      shell: |
+        cd microservices-demo
+        kubectl apply -f ./release/kubernetes-manifests.yaml
+
+    - name: Create externalIPs service frontend-external 
+      shell: |
+        kubectl patch svc frontend-external -n default -p '{"spec": {"type": "LoadBalancer", "externalIPs":["104.198.205.71"]}}'
+
+    - name: NodePort 30274 service frontend-external 
+      shell: |
+        kubectl patch svc frontend-external -n default -p '{"spec": {"ports": [{"port": 80,"targetPort": 8080,"name": "http", "nodePort": 30274}],"type": "LoadBalancer"}}'
+        
+    - name: Get Pods 3
+      shell: |
+        kubectl get pods --all-namespaces
+        
+    - name: Get Pods 4
+      shell: |
+        kubectl get pods --all-namespaces
+        
+    - name: Get Pods 5
+      shell: |
+        kubectl get pods --all-namespaces
+ 
